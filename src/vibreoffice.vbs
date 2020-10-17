@@ -97,7 +97,8 @@ global TEXT_CURSOR as object
 global MULTIPLIER as integer
 global LAST_SEARCH as string
 
-global logged2 as string
+global BUFFER as string
+global BUSY as boolean
 
 ' -----------
 ' Singletons
@@ -800,137 +801,108 @@ End Sub
 ' Main Key Processing
 ' --------------------
 function KeyHandler_KeyPressed(oEvent) as boolean
-    If oEvent.KeyCode = 1281 And oEvent.Modifiers = 1 Then
-    	toggleVibreoffice()
-    	KeyHandler_KeyPressed = True
-    	Exit Function
-    End If
-    
-    ' Exit if plugin is not enabled
-    If MODE = M_DISABLED Then
-        KeyHandler_KeyPressed = False
-        Exit Function
-    End If
-    
-    ' Have to resort to polling because subscribing to theGlobalEventBroadcaster causes crashes
-    dim oFrame : oFrame = StarDesktop.getCurrentFrame()
-    if not EqualUnoObjects(oFrame, oCurrentFrame) then
-    	reinitVibreOffice()
-    	oCurrentFrame = oFrame
-    end if
-    
-	if oEvent.keyChar = "=" and oEvent.Modifiers > 1 then
-		MsgBox(logged2)
-		logged2 = ""
-		KeyHandler_KeyPressed = True
-		Exit Function
-	end if    
-	
-	if oEvent.keyChar = "-" and oEvent.Modifiers > 1 then
-		dim oCur : oCur = getTextCursor()
-		dim s : s = oCur.getString()
-		
-		if len(s) = 0 then 
-			s = "<>"
-		elseif isControl(s) then 
-			s = "<" & asc(s) & ">"
-		end if
-		
-		s = s & chr(13) & TRAP_STATE
-		
-		MsgBox(s)
-		KeyHandler_KeyPressed = True
-		Exit Function
-	end if	
+  ' Exit if plugin is not enabled
+  If MODE = M_DISABLED Then
+    KeyHandler_KeyPressed = False
+    Exit Function
+  End If
 
-    dim bConsumeInput : bConsumeInput = True ' Block all inputs by default
-        
-    ' --------------------------
-    ' Process global shortcuts, exit if matched (like ESC)
-    If ProcessGlobalKey(oEvent) Then
+  ' Have to resort to polling because subscribing to theGlobalEventBroadcaster causes crashes
+  dim oFrame : oFrame = StarDesktop.getCurrentFrame()
+  If not EqualUnoObjects(oFrame, oCurrentFrame) Then
+    reinitVibreOffice()
+    oCurrentFrame = oFrame
+  End If
+
+  dim bConsumeInput : bConsumeInput = True ' Block all inputs by default
+
+  ' --------------------------
+  ' Process global shortcuts, exit if matched (like ESC)
+  If ProcessGlobalKey(oEvent) Then
+    ' Pass
+  ' If INSERT mode, allow all inputs
+  ElseIf getTextCursor() is Nothing Then
+    bConsumeInput = False
+  ElseIf MODE = M_INSERT Then
+    bConsumeInput = False
+    dim c : c = oEvent.keyChar
+    If isControl(c) Then
+      bConsumeInput = BUSY   
+    Else    
+      BUFFER = BUFFER & c
+      bConsumeInput = True
+      If BUSY = False Then
+        BUSY = True
+        printString(getTextCursor(), BUFFER)
+        BUFFER = ""
+        BUSY = False
+      End If      
+    End If    
+  Else
+    dim bIsMultiplier, bIsModified, bIsControl, bIsSpecial
+    bIsMultiplier = False ' reset multiplier by default
+    bIsModified = oEvent.Modifiers > 1 ' If Ctrl or Alt is held down. (Shift=1)
+    bIsControl = (oEvent.Modifiers = 2) or (oEvent.Modifiers = 8)
+    bIsSpecial = getSpecial() <> ""        	
+    ' If Change Mode
+    ' ElseIf MODE = M_NORMAL And Not bIsSpecial And getMovementModifier() = "" And ProcessModeKey(oEvent) Then
+    If ProcessModeKey(oEvent) Then
         ' Pass
-    ' If INSERT mode, allow all inputs
-    ElseIf getTextCursor() is Nothing Then
-    	bConsumeInput = False
-    ElseIf MODE = M_INSERT Then
-		bConsumeInput = True
-		dim c : c = oEvent.keyChar	
-		
-		if isPrintable(c) then
-			logged2 = logged2 & c
-			'TODO Revert if characters are still being swapped during input
-			'print_string(getTextCursor(), c)
-			'bConsumeInput = True
-			bConsumeInput = False
-		else
-			logged2 = logged2 & "<" & asc(c) & ">"
-			bConsumeInput = False
-		end if
-    Else
-    	dim bIsMultiplier, bIsModified, bIsControl, bIsSpecial
-	    bIsMultiplier = False ' reset multiplier by default
-	    bIsModified = oEvent.Modifiers > 1 ' If Ctrl or Alt is held down. (Shift=1)
-	    bIsControl = (oEvent.Modifiers = 2) or (oEvent.Modifiers = 8)
-	    bIsSpecial = getSpecial() <> ""        	
-	    ' If Change Mode
-	    ' ElseIf MODE = M_NORMAL And Not bIsSpecial And getMovementModifier() = "" And ProcessModeKey(oEvent) Then
-	    If ProcessModeKey(oEvent) Then
-	        ' Pass
-	
-	    ' Replace Key
-	    ElseIf getSpecial() = "r" And Not bIsModified Then
-	        dim iLen
-	        iLen = Len(getCursor().getString())
-	        getCursor().setString(genString(oEvent.KeyChar, iLen))
-	
-	    ' Multiplier Key
-	    ElseIf ProcessNumberKey(oEvent) Then
-	        bIsMultiplier = True
-	        delaySpecialReset()
-	
-	    ' Normal Key
-	    ElseIf ProcessNormalKey(getLatinKey(oEvent), oEvent.Modifiers, oEvent) Then
-	        ' Pass
-	
-	    ' If is modified but doesn't match a normal command, allow input
-	    '   (Useful for built-in shortcuts like Ctrl+a, Ctrl+s, Ctrl+w)
-	    ElseIf bIsModified Then
-	        ' Ctrl+a (select all) sets mode to VISUAL
-	        If bIsControl And getLatinKey(oEvent) = "a" Then
-	            gotoMode(M_VISUAL)
-	        End If
-	        bConsumeInput = False
-	
-	    ' Movement modifier here?
-	    ElseIf ProcessMovementModifierKey(getLatinKey(oEvent)) Then
-	        delaySpecialReset()
-	
-	    ' If standard movement key (in VISUAL mode) like arrow keys, home, end
-	    ElseIf MODE = M_VISUAL And ProcessStandardMovementKey(oEvent) Then
-	        ' Pass
-	
-	    ' If bIsSpecial but nothing matched, return to normal mode
-	    ElseIf bIsSpecial Then
-	        gotoMode(M_NORMAL)
-	
-	    ' Allow non-letter keys if unmatched
-	    ' TODO Use getLatinKey()
-	    ElseIf asc(oEvent.KeyChar) = 0 Then
-	        bConsumeInput = False
-	    End If
-	    ' --------------------------
-	
-	    ' Reset Special
-	    resetSpecial()
-	
-	    ' Reset multiplier if last input was not number and not in special mode
-	    If not bIsMultiplier and getSpecial() = "" and getMovementModifier() = "" Then
-	        resetMultiplier()
-	    End If
-	    setStatus(getMultiplier())
+
+    ' Replace Key
+    ElseIf getSpecial() = "r" And Not bIsModified Then
+        dim iLen
+        iLen = Len(getCursor().getString())
+        getCursor().setString(genString(oEvent.KeyChar, iLen))
+
+    ' Multiplier Key
+    ElseIf ProcessNumberKey(oEvent) Then
+        bIsMultiplier = True
+        delaySpecialReset()
+
+    ' Normal Key
+    ElseIf ProcessNormalKey(getLatinKey(oEvent), oEvent.Modifiers, oEvent) Then
+        ' Pass
+
+    ' If is modified but doesn't match a normal command, allow input
+    '   (Useful for built-in shortcuts like Ctrl+a, Ctrl+s, Ctrl+w)
+    ElseIf bIsModified Then
+        ' Ctrl+a (select all) sets mode to VISUAL
+        If bIsControl And getLatinKey(oEvent) = "a" Then
+            gotoMode(M_VISUAL)
+        End If
+        bConsumeInput = False
+
+    ' Movement modifier here?
+    ElseIf ProcessMovementModifierKey(getLatinKey(oEvent)) Then
+        delaySpecialReset()
+
+    ' If standard movement key (in VISUAL mode) like arrow keys, home, end
+    ElseIf MODE = M_VISUAL And ProcessStandardMovementKey(oEvent) Then
+        ' Pass
+
+    ' If bIsSpecial but nothing matched, return to normal mode
+    ElseIf bIsSpecial Then
+        gotoMode(M_NORMAL)
+
+    ' Allow non-letter keys if unmatched
+    ' TODO Use getLatinKey()
+    ElseIf asc(oEvent.KeyChar) = 0 Then
+        bConsumeInput = False
+    End If
+    ' --------------------------
+
+    ' Reset Special
+    resetSpecial()
+
+    ' Reset multiplier if last input was not number and not in special mode
+    If not bIsMultiplier and getSpecial() = "" and getMovementModifier() = "" Then
+        resetMultiplier()
+    End If
+    setStatus(getMultiplier())
 	End If
 
-    KeyHandler_KeyPressed = bConsumeInput
+  KeyHandler_KeyPressed = bConsumeInput
 End Function
 
 Function KeyHandler_KeyReleased(oEvent) As boolean
@@ -1750,22 +1722,25 @@ end sub
 
 
 Sub reinitVibreoffice
-    dim oTextCursor, oCurrentController
-    oCurrentController = getCurrentController()
-    If oCurrentController is Nothing Then
-    	Exit Sub
-    End If
+  dim oTextCursor, oCurrentController
+  oCurrentController = getCurrentController()
+  If oCurrentController is Nothing Then
+    Exit Sub
+  End If
 
-    resetMultiplier()
-    setCursor()
-    setTextCursor()
-    gotoMode(M_NORMAL)
+  resetMultiplier()
+  setCursor()
+  setTextCursor()
+  gotoMode(M_NORMAL)
 
-    ' Show terminal cursor
-    oTextCursor = getTextCursor()
-    If not (oTextCursor Is Nothing) Then
-        cursorReset(oTextCursor)
-    End If
+  ' Show terminal cursor
+  oTextCursor = getTextCursor()
+  If not (oTextCursor Is Nothing) Then
+      cursorReset(oTextCursor)
+  End If
+
+  BUSY = False
+  BUFFER = ""
 End Sub
 
 
