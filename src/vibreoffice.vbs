@@ -97,7 +97,6 @@ global TEXT_CURSOR as object
 global MULTIPLIER as integer
 global LAST_SEARCH as string
 
-global BUFFER as string
 global BUSY as boolean
 
 ' -----------
@@ -807,14 +806,22 @@ function KeyHandler_KeyPressed(oEvent) as boolean
     Exit Function
   End If
 
+  ' Block all inputs by default
+  dim bConsumeInput : bConsumeInput = True
+
+  ' If this function is invoked while previous event is still being processed, just discard the new event
+  If BUSY = True Then
+    KeyHandler_KeyPressed = True
+    Exit Function
+  End If
+  BUSY = True
+
   ' Have to resort to polling because subscribing to theGlobalEventBroadcaster causes crashes
   dim oFrame : oFrame = StarDesktop.getCurrentFrame()
   If not EqualUnoObjects(oFrame, oCurrentFrame) Then
     reinitVibreOffice()
     oCurrentFrame = oFrame
   End If
-
-  dim bConsumeInput : bConsumeInput = True ' Block all inputs by default
 
   ' --------------------------
   ' Process global shortcuts, exit if matched (like ESC)
@@ -825,19 +832,6 @@ function KeyHandler_KeyPressed(oEvent) as boolean
     bConsumeInput = False
   ElseIf MODE = M_INSERT Then
     bConsumeInput = False
-    dim c : c = oEvent.keyChar
-    If isControl(c) Then
-      bConsumeInput = BUSY   
-    Else    
-      BUFFER = BUFFER & c
-      bConsumeInput = True
-      If BUSY = False Then
-        BUSY = True
-        printString(getTextCursor(), BUFFER)
-        BUFFER = ""
-        BUSY = False
-      End If      
-    End If    
   Else
     dim bIsMultiplier, bIsModified, bIsControl, bIsSpecial
     bIsMultiplier = False ' reset multiplier by default
@@ -903,38 +897,37 @@ function KeyHandler_KeyPressed(oEvent) as boolean
 	End If
 
   KeyHandler_KeyPressed = bConsumeInput
+  BUSY = False
 End Function
 
 Function KeyHandler_KeyReleased(oEvent) As boolean
-    ' Exit if plugin is not enabled
-    If MODE = M_DISABLED Then
-        KeyHandler_KeyReleased = False
-        Exit Function
+  ' Exit if plugin is not enabled
+  If MODE = M_DISABLED Then
+    KeyHandler_KeyReleased = False
+    Exit Function
+  End If
+  
+  If asc(oEvent.KeyChar) = 0 Then
+    KeyHandler_KeyReleased = False
+  Else
+    dim iModifiers : iModifiers = oEvent.modifiers
+    dim iKeyCode : iKeyCode = oEvent.keyCode
+    ' Allow Ctrl+c and Ctrl-v, so don't change cursor
+    If (iKeyCode = 514 or iKeyCode = 533) And (iModifiers = 2 Or iModifiers = 8) Then
+    ' Needed to make cursor always select 1 character in NORMAL mode
+    ' Constrict to movement keys only?
+    ElseIf MODE = M_NORMAL Then
+      ' Show terminal-like cursor
+      dim oTextCursor
+      oTextCursor = getTextCursor()
+      If not (oTextCursor Is Nothing) Then
+         ' Do nothing        
+         cursorReset(oTextCursor)
+      End If
     End If
-    
-    If asc(oEvent.KeyChar) = 0 Then
-        KeyHandler_KeyReleased = False
-    Else
-        dim iModifiers as integer
-        iModifiers = oEvent.modifiers
-        dim iKeyCode as integer
-        iKeyCode = oEvent.keyCode
-	    ' Allow Ctrl+c for Copy, so don't change cursor
-        If iKeyCode = 514 And (iModifiers = 2 Or iModifiers = 8) Then
-        ' Needed to make cursor always select 1 character in NORMAL mode
-        ' Constrict to movement keys only?
-        ElseIf MODE = M_NORMAL Then
-	        ' Show terminal-like cursor
-			dim oTextCursor
-	        oTextCursor = getTextCursor()
-	        If not (oTextCursor Is Nothing) Then
-	            ' Do nothing        
-	           cursorReset(oTextCursor)
-	        End If
-        End If
 
-        KeyHandler_KeyReleased = (MODE = M_NORMAL) 'cancel KeyReleased
-    End If
+    KeyHandler_KeyReleased = (MODE = M_NORMAL) 'cancel KeyReleased
+  End If
 End Function
 
 
@@ -1740,7 +1733,6 @@ Sub reinitVibreoffice
   End If
 
   BUSY = False
-  BUFFER = ""
 End Sub
 
 
